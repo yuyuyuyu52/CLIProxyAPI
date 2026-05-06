@@ -1,40 +1,38 @@
 #!/bin/bash
 set -e
 
-REPO="https://github.com/yuyuyuyu52/CLIProxyAPI.git"
+REPO="yuyuyuyu52/CLIProxyAPI"
 INSTALL_DIR="/opt/cliproxy"
+BIN="$INSTALL_DIR/CLIProxyAPI"
 API_KEY="${1:-$(openssl rand -hex 16)}"
 MGMT_KEY="${2:-$(openssl rand -hex 16)}"
 
-echo "==> Installing CLIProxyAPI to $INSTALL_DIR"
+echo "==> Installing CLIProxyAPI"
 
-# 1. Docker
-if ! command -v docker &>/dev/null; then
-  echo "==> Installing Docker..."
-  curl -fsSL https://get.docker.com | sh
-  systemctl enable docker
-  systemctl start docker
-else
-  echo "==> Docker already installed, skipping"
-fi
+# 1. Detect arch
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)  BINARY="CLIProxyAPI-linux-amd64" ;;
+  aarch64) BINARY="CLIProxyAPI-linux-arm64" ;;
+  *)       echo "Unsupported arch: $ARCH"; exit 1 ;;
+esac
 
-# 2. Clone or update
-if [ -d "$INSTALL_DIR/.git" ]; then
-  echo "==> Updating existing repo..."
-  git -C "$INSTALL_DIR" pull
-else
-  echo "==> Cloning repo..."
-  git clone "$REPO" "$INSTALL_DIR"
-fi
+# 2. Download binary
+echo "==> Downloading binary ($BINARY)..."
+mkdir -p "$INSTALL_DIR"
+curl -fSL \
+  "https://github.com/$REPO/releases/download/latest/$BINARY" \
+  -o "$BIN"
+chmod +x "$BIN"
 
-cd "$INSTALL_DIR"
-mkdir -p auths logs
+# 3. Auth dir
+mkdir -p /root/.cli-proxy-api
 
-# 3. Config
-if [ ! -f config.yaml ]; then
-  echo "==> Creating config.yaml..."
+# 4. Config
+if [ ! -f "$INSTALL_DIR/config.yaml" ]; then
   SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo "your-server-ip")
-  cat > config.yaml <<EOF
+  echo "==> Creating config.yaml..."
+  cat > "$INSTALL_DIR/config.yaml" <<EOF
 host: ""
 port: 8317
 
@@ -43,7 +41,7 @@ remote-management:
   secret-key: "$MGMT_KEY"
   disable-control-panel: false
 
-auth-dir: "~/.cli-proxy-api"
+auth-dir: "/root/.cli-proxy-api"
 
 api-keys:
   - "$API_KEY"
@@ -60,22 +58,27 @@ else
   echo "==> config.yaml already exists, skipping"
 fi
 
-# 4. docker-compose patch
-if ! grep -q "cliproxy:local" docker-compose.yml; then
-  sed -i 's|image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}|image: cliproxy:local|' docker-compose.yml
-  sed -i 's|pull_policy: always|# pull_policy: always|' docker-compose.yml
-fi
+# 5. systemd service
+cat > /etc/systemd/system/cliproxy.service <<EOF
+[Unit]
+Description=CLIProxyAPI
+After=network.target
 
-# 5. Build
-echo "==> Building Docker image (this takes a few minutes)..."
-docker build -t cliproxy:local .
+[Service]
+ExecStart=$BIN --config $INSTALL_DIR/config.yaml
+WorkingDirectory=$INSTALL_DIR
+Restart=always
+RestartSec=5
 
-# 6. Start
-echo "==> Starting service..."
-docker compose up -d
+[Install]
+WantedBy=multi-user.target
+EOF
 
-# Wait for startup
-sleep 3
+systemctl daemon-reload
+systemctl enable cliproxy
+systemctl restart cliproxy
+
+sleep 2
 
 SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo "your-server-ip")
 
@@ -90,7 +93,9 @@ echo ""
 echo "  API endpoint     : http://$SERVER_IP:8317/v1"
 echo "  API key          : $API_KEY"
 echo ""
-echo "  Codex CLI config:"
+echo "  Codex CLI:"
 echo "    export OPENAI_API_BASE=http://$SERVER_IP:8317/v1"
 echo "    export OPENAI_API_KEY=$API_KEY"
+echo ""
+echo "  Service status: systemctl status cliproxy"
 echo ""

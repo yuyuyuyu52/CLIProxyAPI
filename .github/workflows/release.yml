@@ -1,0 +1,47 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build linux/amd64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w" \
+            -o CLIProxyAPI-linux-amd64 \
+            ./cmd/server/
+
+      - name: Build linux/arm64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+            -ldflags="-s -w" \
+            -o CLIProxyAPI-linux-arm64 \
+            ./cmd/server/
+
+      - name: Delete old latest release
+        run: gh release delete latest --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release
+        run: |
+          gh release create latest \
+            --title "latest" \
+            --notes "Auto-built from main" \
+            --prerelease \
+            CLIProxyAPI-linux-amd64 \
+            CLIProxyAPI-linux-arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
