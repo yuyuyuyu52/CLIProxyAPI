@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,10 +20,12 @@ const (
 )
 
 var (
-	dynamicVersionMu   sync.RWMutex
-	dynamicCLIVersion  string
-	dynamicSDKVersion  string
-	versionUpdaterOnce sync.Once
+	dynamicVersionMu    sync.RWMutex
+	dynamicCLIVersion   string
+	dynamicSDKVersion   string
+	dynamicBetas        string
+	dynamicStaticPrompt string
+	versionUpdaterOnce  sync.Once
 )
 
 type npmPackageLatest struct {
@@ -46,6 +49,26 @@ func GetDynamicSDKVersion() string {
 	dynamicVersionMu.RLock()
 	defer dynamicVersionMu.RUnlock()
 	return dynamicSDKVersion
+}
+
+// GetDynamicBetas returns the comma-joined Anthropic-Beta string extracted from the
+// latest @anthropic-ai/claude-code npm bundle. Returns empty string until first
+// successful fetch — callers must fall back to their static default.
+func GetDynamicBetas() string {
+	versionUpdaterOnce.Do(startVersionUpdater)
+	dynamicVersionMu.RLock()
+	defer dynamicVersionMu.RUnlock()
+	return dynamicBetas
+}
+
+// GetDynamicStaticPrompt returns the static system-prompt block (joined sections)
+// extracted from the latest @anthropic-ai/claude-code npm bundle. Returns empty
+// string until first successful fetch — callers must fall back to static constants.
+func GetDynamicStaticPrompt() string {
+	versionUpdaterOnce.Do(startVersionUpdater)
+	dynamicVersionMu.RLock()
+	defer dynamicVersionMu.RUnlock()
+	return dynamicStaticPrompt
 }
 
 func startVersionUpdater() {
@@ -74,6 +97,29 @@ func doFetchAndStoreVersions() {
 	}
 	dynamicVersionMu.Unlock()
 	log.Debugf("claude fingerprint versions updated: cli=%s sdk=%s", cli, sdk)
+
+	// Also refresh beta flags and system-prompt sections from the npm bundle.
+	// This runs synchronously in the background goroutine so it doesn't block callers.
+	if cli != "" {
+		betas, sections := FetchBundleExtras(cli)
+		dynamicVersionMu.Lock()
+		if betas != "" {
+			dynamicBetas = betas
+		}
+		if len(sections) == len(jsSectionOrder) {
+			// All sections found — assemble the joined static prompt in canonical order.
+			parts := make([]string, 0, len(jsSectionOrder))
+			for _, key := range jsSectionOrder {
+				parts = append(parts, sections[key])
+			}
+			dynamicStaticPrompt = joinSections(parts)
+		}
+		dynamicVersionMu.Unlock()
+	}
+}
+
+func joinSections(parts []string) string {
+	return strings.Join(parts, "\n\n")
 }
 
 func fetchClaudeVersionsFromNPM() (cliVer, sdkVer string, err error) {
