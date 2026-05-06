@@ -77,6 +77,21 @@ var oauthToolRenameMap = map[string]string{
 // even after remapping. Currently empty — all tools are mapped instead of removed.
 var oauthToolsToRemove = map[string]bool{}
 
+// toOAuthToolName converts a tool name to Claude Code-style format.
+// Explicit map entries take priority; unknown all-lowercase names get their
+// first letter capitalized as a safe fallback so they don't read as a
+// detectable third-party client fingerprint.
+func toOAuthToolName(name string) (newName string, changed bool) {
+	if mapped, ok := oauthToolRenameMap[name]; ok {
+		return mapped, mapped != name
+	}
+	if len(name) > 0 && name == strings.ToLower(name) {
+		titled := strings.ToUpper(name[:1]) + name[1:]
+		return titled, titled != name
+	}
+	return name, false
+}
+
 // Anthropic-compatible upstreams may reject or even crash when Claude models
 // omit max_tokens. Prefer registered model metadata before using a fallback.
 const defaultModelMaxTokens = 1024
@@ -1040,7 +1055,11 @@ func claudeCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {
 }
 
 func checkSystemInstructions(payload []byte) []byte {
-	return checkSystemInstructionsWithSigningMode(payload, false, false, false, "2.1.63", "", "")
+	version := helps.GetDynamicCLIVersion()
+	if version == "" {
+		version = "2.1.63"
+	}
+	return checkSystemInstructionsWithSigningMode(payload, false, false, false, version, "", "")
 }
 
 func isClaudeOAuthToken(apiKey string) bool {
@@ -1131,7 +1150,7 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 			}
 
 			toolJSON := tool.Raw
-			if newName, ok := oauthToolRenameMap[name]; ok && newName != name {
+			if newName, changed := toOAuthToolName(name); changed {
 				updatedTool, err := sjson.Set(toolJSON, "name", newName)
 				if err == nil {
 					toolJSON = updatedTool
@@ -1158,7 +1177,7 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 			// The chosen tool was removed from the tools array, so drop tool_choice to
 			// keep the payload internally consistent and fall back to normal auto tool use.
 			body, _ = sjson.DeleteBytes(body, "tool_choice")
-		} else if newName, ok := oauthToolRenameMap[tcName]; ok && newName != tcName {
+		} else if newName, changed := toOAuthToolName(tcName); changed {
 			body, _ = sjson.SetBytes(body, "tool_choice.name", newName)
 			recordRename(tcName, newName)
 		}
@@ -1177,14 +1196,14 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 				switch partType {
 				case "tool_use":
 					name := part.Get("name").String()
-					if newName, ok := oauthToolRenameMap[name]; ok && newName != name {
+					if newName, changed := toOAuthToolName(name); changed {
 						path := fmt.Sprintf("messages.%d.content.%d.name", msgIndex.Int(), contentIndex.Int())
 						body, _ = sjson.SetBytes(body, path, newName)
 						recordRename(name, newName)
 					}
 				case "tool_reference":
 					toolName := part.Get("tool_name").String()
-					if newName, ok := oauthToolRenameMap[toolName]; ok && newName != toolName {
+					if newName, changed := toOAuthToolName(toolName); changed {
 						path := fmt.Sprintf("messages.%d.content.%d.tool_name", msgIndex.Int(), contentIndex.Int())
 						body, _ = sjson.SetBytes(body, path, newName)
 						recordRename(toolName, newName)
@@ -1198,7 +1217,7 @@ func remapOAuthToolNames(body []byte) ([]byte, map[string]string) {
 						nestedContent.ForEach(func(nestedIndex, nestedPart gjson.Result) bool {
 							if nestedPart.Get("type").String() == "tool_reference" {
 								nestedToolName := nestedPart.Get("tool_name").String()
-								if newName, ok := oauthToolRenameMap[nestedToolName]; ok && newName != nestedToolName {
+								if newName, changed := toOAuthToolName(nestedToolName); changed {
 									nestedPath := fmt.Sprintf("messages.%d.content.%d.content.%d.tool_name", msgIndex.Int(), contentIndex.Int(), nestedIndex.Int())
 									body, _ = sjson.SetBytes(body, nestedPath, newName)
 									recordRename(nestedToolName, newName)
@@ -1613,7 +1632,11 @@ func generateBillingHeader(payload []byte, experimentalCCHSigning bool, version,
 }
 
 func checkSystemInstructionsWithMode(payload []byte, strictMode bool) []byte {
-	return checkSystemInstructionsWithSigningMode(payload, strictMode, false, false, "2.1.63", "", "")
+	version := helps.GetDynamicCLIVersion()
+	if version == "" {
+		version = "2.1.63"
+	}
+	return checkSystemInstructionsWithSigningMode(payload, strictMode, false, false, version, "", "")
 }
 
 // checkSystemInstructionsWithSigningMode injects Claude Code-style system blocks:

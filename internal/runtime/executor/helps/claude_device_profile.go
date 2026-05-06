@@ -80,7 +80,7 @@ type claudeDeviceProfileCacheEntry struct {
 
 func ClaudeDeviceProfileStabilizationEnabled(cfg *config.Config) bool {
 	if cfg == nil || cfg.ClaudeHeaderDefaults.StabilizeDeviceProfile == nil {
-		return false
+		return true
 	}
 	return *cfg.ClaudeHeaderDefaults.StabilizeDeviceProfile
 }
@@ -112,9 +112,19 @@ func defaultClaudeDeviceProfile(cfg *config.Config) ClaudeDeviceProfile {
 		hd = cfg.ClaudeHeaderDefaults
 	}
 
+	cliVersion := GetDynamicCLIVersion()
+	if cliVersion == "" {
+		cliVersion = "2.1.63"
+	}
+	sdkVersion := GetDynamicSDKVersion()
+	if sdkVersion == "" {
+		sdkVersion = defaultClaudeFingerprintPackageVersion
+	}
+	defaultUA := "claude-cli/" + cliVersion + " (external, cli)"
+
 	profile := ClaudeDeviceProfile{
-		UserAgent:      hdrDefault(hd.UserAgent, defaultClaudeFingerprintUserAgent),
-		PackageVersion: hdrDefault(hd.PackageVersion, defaultClaudeFingerprintPackageVersion),
+		UserAgent:      hdrDefault(hd.UserAgent, defaultUA),
+		PackageVersion: hdrDefault(hd.PackageVersion, sdkVersion),
 		RuntimeVersion: hdrDefault(hd.RuntimeVersion, defaultClaudeFingerprintRuntimeVersion),
 		OS:             hdrDefault(hd.OS, defaultClaudeFingerprintOS),
 		Arch:           hdrDefault(hd.Arch, defaultClaudeFingerprintArch),
@@ -364,6 +374,9 @@ func DefaultClaudeVersion(cfg *config.Config) string {
 	profile := defaultClaudeDeviceProfile(cfg)
 	if version, ok := parseClaudeCLIVersion(profile.UserAgent); ok {
 		return strconv.Itoa(version.major) + "." + strconv.Itoa(version.minor) + "." + strconv.Itoa(version.patch)
+	}
+	if v := GetDynamicCLIVersion(); v != "" {
+		return v
 	}
 	return "2.1.63"
 }
